@@ -1,3 +1,5 @@
+import math
+
 import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils import weight_norm
@@ -34,4 +36,34 @@ class _ResidualBlock(nn.Module):
         x = F.pad(x, (self.padding, 0))
         x = self.dropout(self.relu(self.conv2(x)))
         x = x + residual
+        return x
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, his_len, d_feature, num_filters, kernel_size, dropout, num_layers=None):
+        super(ResidualBlock, self).__init__()
+        dilation_factor = kernel_size
+
+        # 如果 num_layers 没有被传递，就计算感受野能覆盖整个输入序列的 num_layers，
+        # 由论文可知感受野的计算方式为(k− 1)d，d随网络层数指数级增长
+        # (kernel_size-1)*(dilation_factor**(num_layers-1))==his_len-1 => num_layers
+        if num_layers is None:
+            num_layers = math.ceil(
+                math.log((his_len - 1) / (kernel_size - 1), dilation_factor) + 1
+            )
+
+        self.residual_blocks_list = []
+        for i in range(num_layers):
+            dilation = dilation_factor ** i
+            res_block = _ResidualBlock(
+                d_feature, num_filters, kernel_size, dilation, dropout
+            )
+            self.residual_blocks_list.append(res_block)
+        self.residual_blocks = nn.ModuleList(self.residual_blocks_list)
+
+    def forward(self, x):
+        x = x.permute(0, 2, 1)
+        for residual_block in self.residual_blocks:
+            x = residual_block(x)
+        x = x.permute(0, 2, 1)
         return x
